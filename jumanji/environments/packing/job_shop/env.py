@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 
 from jumanji import specs
 from jumanji.env import Environment
+from jumanji.environments.packing.job_shop.action_mask import create_action_mask
 from jumanji.environments.packing.job_shop.generator import Generator, RandomGenerator
 from jumanji.environments.packing.job_shop.machines import Machines
 from jumanji.environments.packing.job_shop.observation import Observation
@@ -144,12 +145,7 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
         state = self.generator(key)
 
         # Create the action mask and update the state
-        state.action_mask = self._create_action_mask(
-            state.machines.job_ids,
-            state.machines.remaining_times,
-            state.operations.machine_ids,
-            state.operations.mask,
-        )
+        state.action_mask = create_action_mask(state.machines, state.operations)
 
         # Get the observation and the timestep
         obs = self._observation_from_state(state)
@@ -181,11 +177,7 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
         # Obtain the id for every job's next operation
         op_ids = jnp.argmax(state.operations.mask, axis=-1)
 
-        # Update the status of all machines
-        (
-            updated_machines_job_ids,
-            updated_machines_remaining_times,
-        ) = self._update_machines(
+        updated_machines = self._update_machines(
             action,
             op_ids,
             state.machines.job_ids,
@@ -193,50 +185,35 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
             state.operations.durations,
         )
 
-        # Update the status of operations that have been scheduled
-        updated_ops_mask, updated_scheduled_times = self._update_operations(
+        updated_operations = self._update_operations(
             action,
             op_ids,
             state.step_count,
-            state.operations.scheduled_times,
-            state.operations.mask,
+            state.operations
         )
 
         # Update the action_mask
-        updated_action_mask = self._create_action_mask(
-            updated_machines_job_ids,
-            updated_machines_remaining_times,
-            state.operations.machine_ids,
-            updated_ops_mask,
-        )
+        updated_action_mask = create_action_mask(updated_machines, updated_operations)
 
         # Increment the time step
         updated_step_count = jnp.array(state.step_count + 1, jnp.int32)
 
         # Check if all machines are idle simultaneously
         all_machines_idle = jnp.all(
-            (updated_machines_job_ids == self.no_op_idx)
-            & (updated_machines_remaining_times == 0)
+            (updated_machines.job_ids == self.no_op_idx)
+            & (updated_machines.remaining_times == 0)
         )
 
         # Check if the schedule has finished
-        all_operations_scheduled = ~jnp.any(updated_ops_mask)
+        all_operations_scheduled = ~jnp.any(updated_operations.mask)
         schedule_finished = all_operations_scheduled & jnp.all(
-            updated_machines_remaining_times == 0
+            updated_machines.remaining_times == 0
         )
 
         # Update the state and extract the next observation
         next_state = State(
-            operations=Operations(
-                machine_ids=state.operations.machine_ids,
-                durations=state.operations.durations,
-                mask=updated_ops_mask,
-                scheduled_times=updated_scheduled_times,
-            ),
-            machines=Machines(
-                job_ids=updated_machines_job_ids,
-                remaining_times=updated_machines_remaining_times,
-            ),
+            operations=updated_operations,
+            machines=updated_machines,
             action_mask=updated_action_mask,
             step_count=updated_step_count,
             key=state.key,
@@ -268,8 +245,7 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
         action: chex.Array,
         op_ids: chex.Array,
         step_count: int,
-        scheduled_times: chex.Array,
-        ops_mask: chex.Array,
+        operations: Operations
     ) -> Any:
         """Update the operations mask and schedule times based on the newly scheduled
          operations as detailed by the action.
@@ -294,10 +270,15 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
         is_next_op = is_next_op.at[jnp.arange(self.num_jobs), op_ids].set(True)
         is_new_job_and_next_op = jnp.logical_and(is_new_job, is_next_op)
         updated_scheduled_times = jnp.where(
-            is_new_job_and_next_op, step_count, scheduled_times
+            is_new_job_and_next_op, step_count, operations.scheduled_times
         )
-        updated_ops_mask = ops_mask & ~is_new_job_and_next_op
-        return updated_ops_mask, updated_scheduled_times
+        updated_ops_mask = operations.mask & ~is_new_job_and_next_op
+        return Operations(
+            machine_ids=operations.machine_ids,
+            durations=operations.durations,
+            mask=updated_ops_mask,
+            scheduled_times=updated_scheduled_times
+        )
 
     def _update_machines(
         self,
@@ -349,7 +330,10 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
             remaining_times > 0, remaining_times - 1, 0
         )
 
-        return updated_machines_job_ids, updated_machines_remaining_times
+        return Machines(
+            job_ids=updated_machines_job_ids,
+            remaining_times=updated_machines_remaining_times
+        )
 
     @cached_property
     def observation_spec(self) -> specs.Spec[Observation]:
@@ -486,49 +470,6 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
             action_mask=state.action_mask,
         )
 
-    def _is_action_valid(
-        self,
-        job_id: jnp.int32,
-        op_id: jnp.int32,
-        machine_id: jnp.int32,
-        machines_job_ids: chex.Array,
-        machines_remaining_times: chex.Array,
-        ops_machine_ids: chex.Array,
-        updated_ops_mask: chex.Array,
-    ) -> Any:
-        """Check whether a particular action is valid, specifically the action of scheduling
-         the specified operation of the specified job on the specified machine given the
-         current status of all machines.
-
-         To achieve this, four things need to be checked:
-            - The machine is available.
-            - The machine is exactly the one required by the operation.
-            - The job is not currently being processed on any other machine.
-            - The job has not yet finished all of its operations.
-
-        Args:
-            job_id: the job in question.
-            op_id: the operation of the job in question.
-            machine_id: the machine in question.
-            machines_job_ids: array giving which job (or no-op) each machine is working on.
-            machines_remaining_times: array giving the time until available for each machine.
-            ops_machine_ids: array specifying the machine needed by each operation.
-            updated_ops_mask: a boolean mask indicating which operations for each job
-                remain to be scheduled.
-
-        Returns:
-            Boolean representing whether the action in question is valid.
-        """
-        is_machine_available = machines_remaining_times[machine_id] == 0
-        is_correct_machine = ops_machine_ids[job_id, op_id] == machine_id
-        is_job_ready = ~jnp.any(
-            (machines_job_ids == job_id) & (machines_remaining_times > 0)
-        )
-        is_job_finished = jnp.all(~updated_ops_mask[job_id])
-        return (
-            is_machine_available & is_correct_machine & is_job_ready & ~is_job_finished
-        )
-
     def _set_busy(self, job_id: jnp.int32, action: chex.Array) -> Any:
         """Determine, for a given action and job, whether the job is a new job to be
         scheduled.
@@ -543,51 +484,3 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
         """
         return jnp.any(action == job_id)
 
-    def _create_action_mask(
-        self,
-        machines_job_ids: chex.Array,
-        machines_remaining_times: chex.Array,
-        ops_machine_ids: chex.Array,
-        ops_mask: chex.Array,
-    ) -> chex.Array:
-        """Create the action mask based on the current status of all machines and which
-        operations remain to be scheduled. Specifically, for each machine, it is checked
-        whether each job (or no-op) can be scheduled on that machine. Note that we vmap
-        twice: once over the jobs and once over the machines.
-
-        Args:
-            machines_job_ids: array giving which job (or no-op) each machine is working on.
-            machines_remaining_times: array giving the time until available for each machine.
-            ops_machine_ids: array specifying the machine needed by each operation.
-            ops_mask: a boolean mask indicating which operations for each job
-                remain to be scheduled.
-
-        Returns:
-            The action mask representing which jobs (or no-op) can be scheduled on each machine.
-                Has shape (num_machines, num_jobs+1).
-        """
-        job_indexes = jnp.arange(self.num_jobs)
-        machine_indexes = jnp.arange(self.num_machines)
-
-        # Get the ID of the next operation for each job
-        next_op_ids = jnp.argmax(ops_mask, axis=-1)
-
-        # vmap over the jobs (and their ops) and vmap over the machines
-        action_mask = jax.vmap(
-            jax.vmap(
-                self._is_action_valid, in_axes=(0, 0, None, None, None, None, None)
-            ),
-            in_axes=(None, None, 0, None, None, None, None),
-        )(
-            job_indexes,
-            next_op_ids,
-            machine_indexes,
-            machines_job_ids,
-            machines_remaining_times,
-            ops_machine_ids,
-            ops_mask,
-        )
-        no_op_mask = jnp.ones((self.num_machines, 1), bool)
-        full_action_mask = jnp.concatenate([action_mask, no_op_mask], axis=-1)
-
-        return full_action_mask

@@ -1,17 +1,3 @@
-# Copyright 2022 InstaDeep Ltd. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from functools import cached_property
 from typing import Any, Optional, Sequence, Tuple
 
@@ -24,7 +10,10 @@ from numpy.typing import NDArray
 from jumanji import specs
 from jumanji.env import Environment
 from jumanji.environments.packing.job_shop.generator import Generator, RandomGenerator
-from jumanji.environments.packing.job_shop.types import Observation, State
+from jumanji.environments.packing.job_shop.machines import Machines
+from jumanji.environments.packing.job_shop.observation import Observation
+from jumanji.environments.packing.job_shop.operations import Operations
+from jumanji.environments.packing.job_shop.state import State
 from jumanji.environments.packing.job_shop.viewer import JobShopViewer
 from jumanji.types import TimeStep, restart, termination, transition
 from jumanji.viewer import Viewer
@@ -156,10 +145,10 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
 
         # Create the action mask and update the state
         state.action_mask = self._create_action_mask(
-            state.machines_job_ids,
-            state.machines_remaining_times,
-            state.ops_machine_ids,
-            state.ops_mask,
+            state.machines.job_ids,
+            state.machines.remaining_times,
+            state.operations.machine_ids,
+            state.operations.mask,
         )
 
         # Get the observation and the timestep
@@ -190,7 +179,7 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
         invalid = ~jnp.all(state.action_mask[jnp.arange(self.num_machines), action])  # type: ignore
 
         # Obtain the id for every job's next operation
-        op_ids = jnp.argmax(state.ops_mask, axis=-1)
+        op_ids = jnp.argmax(state.operations.mask, axis=-1)
 
         # Update the status of all machines
         (
@@ -199,9 +188,9 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
         ) = self._update_machines(
             action,
             op_ids,
-            state.machines_job_ids,
-            state.machines_remaining_times,
-            state.ops_durations,
+            state.machines.job_ids,
+            state.machines.remaining_times,
+            state.operations.durations,
         )
 
         # Update the status of operations that have been scheduled
@@ -209,15 +198,15 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
             action,
             op_ids,
             state.step_count,
-            state.scheduled_times,
-            state.ops_mask,
+            state.operations.scheduled_times,
+            state.operations.mask,
         )
 
         # Update the action_mask
         updated_action_mask = self._create_action_mask(
             updated_machines_job_ids,
             updated_machines_remaining_times,
-            state.ops_machine_ids,
+            state.operations.machine_ids,
             updated_ops_mask,
         )
 
@@ -238,14 +227,18 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
 
         # Update the state and extract the next observation
         next_state = State(
-            ops_machine_ids=state.ops_machine_ids,
-            ops_durations=state.ops_durations,
-            ops_mask=updated_ops_mask,
-            machines_job_ids=updated_machines_job_ids,
-            machines_remaining_times=updated_machines_remaining_times,
+            operations=Operations(
+                machine_ids=state.operations.machine_ids,
+                durations=state.operations.durations,
+                mask=updated_ops_mask,
+                scheduled_times=updated_scheduled_times,
+            ),
+            machines=Machines(
+                job_ids=updated_machines_job_ids,
+                remaining_times=updated_machines_remaining_times,
+            ),
             action_mask=updated_action_mask,
             step_count=updated_step_count,
-            scheduled_times=updated_scheduled_times,
             key=state.key,
         )
         next_obs = self._observation_from_state(next_state)
@@ -485,11 +478,11 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
         """
 
         return Observation(
-            ops_machine_ids=state.ops_machine_ids,
-            ops_durations=state.ops_durations,
-            ops_mask=state.ops_mask,
-            machines_job_ids=state.machines_job_ids,
-            machines_remaining_times=state.machines_remaining_times,
+            ops_machine_ids=state.operations.machine_ids,
+            ops_durations=state.operations.durations,
+            ops_mask=state.operations.mask,
+            machines_job_ids=state.machines.job_ids,
+            machines_remaining_times=state.machines.remaining_times,
             action_mask=state.action_mask,
         )
 

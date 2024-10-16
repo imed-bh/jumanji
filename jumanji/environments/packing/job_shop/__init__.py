@@ -13,4 +13,5 @@
 # limitations under the License.
 
 from jumanji.environments.packing.job_shop.env import JobShop
-from jumanji.environments.packing.job_shop.types import Observation, State
+from jumanji.environments.packing.job_shop.observation import Observation
+from jumanji.environments.packing.job_shop.state import State

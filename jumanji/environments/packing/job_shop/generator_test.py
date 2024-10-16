@@ -21,7 +21,7 @@ from jumanji.environments.packing.job_shop.generator import (
     RandomGenerator,
     ToyGenerator,
 )
-from jumanji.environments.packing.job_shop.types import State
+from jumanji.environments.packing.job_shop.state import State
 from jumanji.testing.pytrees import assert_trees_are_different, assert_trees_are_equal
 
 

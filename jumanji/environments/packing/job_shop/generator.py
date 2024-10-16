@@ -18,7 +18,9 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from jumanji.environments.packing.job_shop.types import State
+from jumanji.environments.packing.job_shop.machines import Machines
+from jumanji.environments.packing.job_shop.operations import Operations
+from jumanji.environments.packing.job_shop.state import State
 
 
 class Generator(abc.ABC):
@@ -100,15 +102,20 @@ class ToyGenerator(Generator):
         ops_mask = ops_machine_ids != -1
         step_count = jnp.array(0, jnp.int32)
 
+
         state = State(
-            ops_machine_ids=ops_machine_ids,
-            ops_durations=ops_durations,
-            ops_mask=ops_mask,
-            machines_job_ids=machines_job_ids,
-            machines_remaining_times=machines_remaining_times,
+            operations=Operations(
+                machine_ids=ops_machine_ids,
+                durations=ops_durations,
+                mask=ops_mask,
+                scheduled_times=scheduled_times,
+            ),
+            machines=Machines(
+                job_ids=machines_job_ids,
+                remaining_times=machines_remaining_times,
+            ),
             action_mask=None,
             step_count=step_count,
-            scheduled_times=scheduled_times,
             key=jax.random.PRNGKey(0),
         )
 
@@ -172,14 +179,18 @@ class RandomGenerator(Generator):
         step_count = jnp.array(0, jnp.int32)
 
         state = State(
-            ops_machine_ids=ops_machine_ids,
-            ops_durations=ops_durations,
-            ops_mask=ops_mask,
-            machines_job_ids=machines_job_ids,
-            machines_remaining_times=machines_remaining_times,
+            operations=Operations(
+                machine_ids=ops_machine_ids,
+                durations=ops_durations,
+                mask=ops_mask,
+                scheduled_times=scheduled_times,
+            ),
+            machines=Machines(
+                job_ids=machines_job_ids,
+                remaining_times=machines_remaining_times,
+            ),
             action_mask=None,
             step_count=step_count,
-            scheduled_times=scheduled_times,
             key=key,
         )
 

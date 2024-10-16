@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 import jumanji.environments
-from jumanji.environments.packing.job_shop.types import State
+from jumanji.environments.packing.job_shop.state import State
 from jumanji.viewer import Viewer
 
 

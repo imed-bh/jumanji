@@ -1,17 +1,3 @@
-# Copyright 2022 InstaDeep Ltd. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import jax.numpy as jnp
 import jax.random
 import pytest
@@ -19,7 +5,9 @@ from chex import PRNGKey
 
 from jumanji.environments.packing.job_shop.env import JobShop
 from jumanji.environments.packing.job_shop.generator import Generator
-from jumanji.environments.packing.job_shop.types import State
+from jumanji.environments.packing.job_shop.machines import Machines
+from jumanji.environments.packing.job_shop.operations import Operations
+from jumanji.environments.packing.job_shop.state import State
 
 
 class DummyGenerator(Generator):
@@ -100,14 +88,18 @@ class DummyGenerator(Generator):
         step_count = jnp.array(0, jnp.int32)
 
         state = State(
-            ops_machine_ids=ops_machine_ids,
-            ops_durations=ops_durations,
-            ops_mask=ops_mask,
-            machines_job_ids=machines_job_ids,
-            machines_remaining_times=machines_remaining_times,
+            operations=Operations(
+                machine_ids=ops_machine_ids,
+                durations=ops_durations,
+                mask=ops_mask,
+                scheduled_times=scheduled_times,
+            ),
+            machines=Machines(
+                job_ids=machines_job_ids,
+                remaining_times=machines_remaining_times,
+            ),
             action_mask=action_mask,
             step_count=step_count,
-            scheduled_times=scheduled_times,
             key=jax.random.PRNGKey(0),
         )
 

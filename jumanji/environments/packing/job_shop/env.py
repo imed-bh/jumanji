@@ -171,22 +171,15 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
             state: the updated environment state.
             timestep: the updated timestep.
         """
-        # Check the action is legal
         invalid = ~jnp.all(state.action_mask[jnp.arange(self.num_machines), action])  # type: ignore
 
         machines = state.machines.update(action, state.operations.next_op_durations(action), self.no_op_idx)
 
-        updated_operations = self._update_operations(
-            action,
-            state.step_count,
-            state.operations
-        )
+        operations = state.operations.update(action, state.step_count)
 
-        # Update the action_mask
-        updated_action_mask = create_action_mask(machines, updated_operations)
+        updated_action_mask = create_action_mask(machines, operations)
 
-        # Increment the time step
-        updated_step_count = jnp.array(state.step_count + 1, jnp.int32)
+        updated_step_count = state.step_count + 1
 
         # Check if all machines are idle simultaneously
         all_machines_idle = jnp.all(
@@ -195,14 +188,14 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
         )
 
         # Check if the schedule has finished
-        all_operations_scheduled = ~jnp.any(updated_operations.mask)
+        all_operations_scheduled = ~jnp.any(operations.mask)
         schedule_finished = all_operations_scheduled & jnp.all(
             machines.remaining_times == 0
         )
 
         # Update the state and extract the next observation
         next_state = State(
-            operations=updated_operations,
+            operations=operations,
             machines=machines,
             action_mask=updated_action_mask,
             step_count=updated_step_count,
@@ -229,46 +222,6 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
         )
 
         return next_state, timestep
-
-    def _update_operations(
-        self,
-        action: chex.Array,
-        step_count: int,
-        operations: Operations
-    ) -> Any:
-        """Update the operations mask and schedule times based on the newly scheduled
-         operations as detailed by the action.
-
-         Args:
-            action: array representing the job (or no-op) scheduled by each machine.
-            op_ids: array containing the index of the next operation for each job.
-            step_count: the current time.
-            scheduled_times: specifies the time step at which each operation was
-                scheduled. Set to -1 if the operation has not been scheduled yet.
-            ops_mask: specifies which operations have yet to be scheduled.
-
-        Returns:
-            updated_ops_mask: specifies which operations have yet to be scheduled.
-            updated_scheduled_times: specifies the time step at which each operation was
-                scheduled. Set to -1 if the operation has not been scheduled yet.
-        """
-        job_id_batched = jnp.arange(self.num_jobs)
-        is_new_job = jax.vmap(self._set_busy, in_axes=(0, None))(job_id_batched, action)
-        is_new_job = jnp.tile(is_new_job, reps=(self.max_num_ops, 1)).T
-        is_next_op = jnp.zeros(shape=(self.num_jobs, self.max_num_ops), dtype=bool)
-        op_ids = operations.next_op_ids
-        is_next_op = is_next_op.at[jnp.arange(self.num_jobs), op_ids].set(True)
-        is_new_job_and_next_op = jnp.logical_and(is_new_job, is_next_op)
-        updated_scheduled_times = jnp.where(
-            is_new_job_and_next_op, step_count, operations.scheduled_times
-        )
-        updated_ops_mask = operations.mask & ~is_new_job_and_next_op
-        return Operations(
-            machine_ids=operations.machine_ids,
-            durations=operations.durations,
-            mask=updated_ops_mask,
-            scheduled_times=updated_scheduled_times
-        )
 
     @cached_property
     def observation_spec(self) -> specs.Spec[Observation]:
@@ -404,18 +357,3 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
             machines_remaining_times=state.machines.remaining_times,
             action_mask=state.action_mask,
         )
-
-    def _set_busy(self, job_id: jnp.int32, action: chex.Array) -> Any:
-        """Determine, for a given action and job, whether the job is a new job to be
-        scheduled.
-
-        Args:
-            job_id: identifier of a job.
-            action: `Action` object whose indices and values represent the machines and
-                jobs, respectively.
-
-        Returns:
-            Boolean indicating whether the specified job is a job that will be scheduled.
-        """
-        return jnp.any(action == job_id)
-

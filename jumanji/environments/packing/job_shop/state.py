@@ -32,5 +32,5 @@ class State:
     operations: Operations
     machines: Machines
     action_mask: Optional[chex.Array]  # (num_machines, num_jobs + 1)
-    step_count: chex.Numeric  # ()
+    step_count: chex.Array  # ()
     key: chex.PRNGKey  # (2,)

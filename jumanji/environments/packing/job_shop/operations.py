@@ -1,3 +1,4 @@
+from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import chex
@@ -32,6 +33,26 @@ class Operations:
     def next_machine_id_for_job(self, job_id):
         op_id = self.next_op_ids[job_id]
         return self.machine_ids[job_id, op_id]
+
+    def update(self, action: chex.Array, step_count: chex.Array) -> Operations:
+        job_ids = jnp.arange(self.num_jobs)
+
+        is_new_job = jnp.isin(job_ids, action)
+        is_new_job = jnp.expand_dims(is_new_job, axis=-1)
+
+        is_next_op = jnp.zeros(shape=(self.num_jobs, self.max_num_ops), dtype=bool)
+        is_next_op = is_next_op.at[job_ids, self.next_op_ids].set(True)
+
+        is_new_op = is_new_job & is_next_op
+        mask = self.mask & ~is_new_op
+        scheduled_times = jnp.where(is_new_op, step_count, self.scheduled_times)
+
+        return Operations(
+            machine_ids=self.machine_ids,
+            durations=self.durations,
+            mask=mask,
+            scheduled_times=scheduled_times
+        )
 
 
 def operations_flatten(operations: Operations):

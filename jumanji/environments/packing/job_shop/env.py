@@ -174,46 +174,36 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
         # Check the action is legal
         invalid = ~jnp.all(state.action_mask[jnp.arange(self.num_machines), action])  # type: ignore
 
-        # Obtain the id for every job's next operation
-        op_ids = jnp.argmax(state.operations.mask, axis=-1)
-
-        updated_machines = self._update_machines(
-            action,
-            op_ids,
-            state.machines.job_ids,
-            state.machines.remaining_times,
-            state.operations.durations,
-        )
+        machines = state.machines.update(action, state.operations.next_op_durations(action), self.no_op_idx)
 
         updated_operations = self._update_operations(
             action,
-            op_ids,
             state.step_count,
             state.operations
         )
 
         # Update the action_mask
-        updated_action_mask = create_action_mask(updated_machines, updated_operations)
+        updated_action_mask = create_action_mask(machines, updated_operations)
 
         # Increment the time step
         updated_step_count = jnp.array(state.step_count + 1, jnp.int32)
 
         # Check if all machines are idle simultaneously
         all_machines_idle = jnp.all(
-            (updated_machines.job_ids == self.no_op_idx)
-            & (updated_machines.remaining_times == 0)
+            (machines.job_ids == self.no_op_idx)
+            & (machines.remaining_times == 0)
         )
 
         # Check if the schedule has finished
         all_operations_scheduled = ~jnp.any(updated_operations.mask)
         schedule_finished = all_operations_scheduled & jnp.all(
-            updated_machines.remaining_times == 0
+            machines.remaining_times == 0
         )
 
         # Update the state and extract the next observation
         next_state = State(
             operations=updated_operations,
-            machines=updated_machines,
+            machines=machines,
             action_mask=updated_action_mask,
             step_count=updated_step_count,
             key=state.key,
@@ -243,7 +233,6 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
     def _update_operations(
         self,
         action: chex.Array,
-        op_ids: chex.Array,
         step_count: int,
         operations: Operations
     ) -> Any:
@@ -267,6 +256,7 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
         is_new_job = jax.vmap(self._set_busy, in_axes=(0, None))(job_id_batched, action)
         is_new_job = jnp.tile(is_new_job, reps=(self.max_num_ops, 1)).T
         is_next_op = jnp.zeros(shape=(self.num_jobs, self.max_num_ops), dtype=bool)
+        op_ids = operations.next_op_ids
         is_next_op = is_next_op.at[jnp.arange(self.num_jobs), op_ids].set(True)
         is_new_job_and_next_op = jnp.logical_and(is_new_job, is_next_op)
         updated_scheduled_times = jnp.where(
@@ -278,61 +268,6 @@ class JobShop(Environment[State, specs.MultiDiscreteArray, Observation]):
             durations=operations.durations,
             mask=updated_ops_mask,
             scheduled_times=updated_scheduled_times
-        )
-
-    def _update_machines(
-        self,
-        action: chex.Array,
-        op_ids: chex.Array,
-        machines_job_ids: chex.Array,
-        machines_remaining_times: chex.Array,
-        ops_durations: chex.Array,
-    ) -> Any:
-        """Update the status of all machines based on the action, specifically:
-            - The specific job (or no-op) processed by each machine.
-            - The number of time steps until each machine is available.
-
-        Args:
-            action: array representing the job (or no-op) scheduled by each machine.
-            op_ids: array containing the index of the next operation for each job.
-            machines_job_ids: array containing the job (or no-op) processed by each machine.
-            machines_remaining_times: array containing the time remaining until available
-                for each machine.
-            ops_durations: for each job, it specifies the processing time of each
-                operation.
-
-        Returns:
-            updated_machines_job_ids: array containing the job (or no-op) processed by
-                each machine.
-            updated_machines_remaining_times: array containing the time remaining
-                until available for each machine.
-        """
-        # For machines that do a no-op, keep the existing job (or no-op)
-        job_ids = jnp.where(action == self.no_op_idx, machines_job_ids, action)
-
-        # If a machine does a no-op and is available, schedule the job (or no-op)
-        updated_machines_job_ids = jnp.where(
-            (action == self.no_op_idx) & (machines_remaining_times == 0),
-            action,
-            job_ids,
-        )
-
-        # If a machine does a no-op, keep the existing remaining time
-        # Otherwise, use the duration of the job's operation
-        remaining_times = jnp.where(
-            action == self.no_op_idx,
-            machines_remaining_times,
-            ops_durations[action, op_ids[action]],
-        )
-
-        # For busy machines, decrement the remaining time by one
-        updated_machines_remaining_times = jnp.where(
-            remaining_times > 0, remaining_times - 1, 0
-        )
-
-        return Machines(
-            job_ids=updated_machines_job_ids,
-            remaining_times=updated_machines_remaining_times
         )
 
     @cached_property

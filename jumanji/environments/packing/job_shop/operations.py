@@ -1,10 +1,6 @@
-from functools import cached_property
-
 import jax
 import jax.numpy as jnp
 import chex
-from Cython.Compiler.TreePath import operations
-from testfixtures.tests.test_logcapture import child
 
 
 @chex.dataclass
@@ -14,17 +10,21 @@ class Operations:
     mask: chex.Array  # (num_jobs, max_num_ops)
     scheduled_times: chex.Array  # (num_jobs, max_num_ops)
 
-    @cached_property
+    @property
     def num_jobs(self):
         return self.machine_ids.shape[0]
 
-    @cached_property
+    @property
     def max_num_ops(self):
         return self.machine_ids.shape[1]
 
-    @cached_property
+    @property
     def next_op_ids(self):
         return jnp.argmax(self.mask, axis=-1)
+
+    def next_op_durations(self, job_ids):
+        op_ids = self.next_op_ids[job_ids]
+        return self.durations[job_ids, op_ids]
 
     def is_job_finished(self, job_id):
         return jnp.all(~self.mask[job_id])
